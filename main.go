@@ -200,6 +200,17 @@ func main() {
 	fmt.Println(" username : " + username)
 	fmt.Println(" workers  : " + strconv.Itoa(workerCount))
 	fmt.Println(" wordlist : " + wordlistPath)
+	fmt.Println(" Inverted : " + strconv.FormatBool(inverted))
+	if globalproxy.ip != "" {
+		fmt.Println(" ============= Proxy  ============= ")
+		fmt.Println(" ip       : " + globalproxy.ip)
+		fmt.Println(" port     : " + strconv.Itoa(globalproxy.port))
+		if globalproxy.username != "" {
+			fmt.Println(" username : " + globalproxy.username)
+			fmt.Println(" password : " + globalproxy.password)
+		}
+		fmt.Println(" ============= Proxy  ============= ")
+	}
 	fmt.Println(" Type -h for help")
 	fmt.Println()
 	target := addr + ":" + strconv.Itoa(port)
