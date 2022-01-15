@@ -39,13 +39,13 @@ func CustomDialTimeout(network, address string, timeout time.Duration, proxysett
 		}
 		dialSocksProxy, err := proxy.SOCKS5("tcp", proxysetting.ip+":"+strconv.Itoa(proxysetting.port), &auth, &d)
 		if err != nil {
-			return nil, err
+			return nil, err // todo: throw different error (rotate proxy because its not reachable)
 		}
 		return dialSocksProxy.Dial(network, address)
 	}
 	dialSocksProxy, err := proxy.SOCKS5("tcp", proxysetting.ip+":"+strconv.Itoa(proxysetting.port), nil, &d)
 	if err != nil {
-		return nil, err
+		return nil, err // todo: throw different error (rotate proxy because its not reachable)
 	}
 	return dialSocksProxy.Dial(network, address)
 }
@@ -56,6 +56,7 @@ func CustomDial(network, addr string, config *ssh.ClientConfig, proxysetting Pro
 		return nil, err
 	}
 	c, chans, reqs, err := ssh.NewClientConn(conn, addr, config)
+	// todo Implement her the fail2ban check
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +72,6 @@ func sshlogin(addr string, username string, password string, timeout int64, prox
 		HostKeyCallback: ssh.HostKeyCallback(func(hostname string, remote net.Addr, key ssh.PublicKey) error { return nil }),
 		Timeout:         time.Duration(timeout * int64(time.Second)),
 	}
-	// Todo: implement another check to detect fail2ban or other connectivity problems. which does not indicate that the login was correct or incorrect
 	client, err := CustomDial("tcp", addr, config, proxysetting)
 	if err != nil {
 		return false
