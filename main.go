@@ -214,7 +214,7 @@ func main() {
 	proxycreds := ""
 
 	rand.Seed(time.Now().UnixNano())
-	flag.StringVar(&addr, "h", "127.0.0.1", "Specify Hostname or ip. Default is 127.0.0.1")
+	flag.StringVar(&addr, "d", "127.0.0.1", "Specify Hostname or ip. Default is 127.0.0.1")
 	flag.IntVar(&port, "p", 22, "Specify Port. Default is 22")
 	flag.StringVar(&username, "u", "root", "Specify username or password (depends on inverted flag). Default is root")
 	flag.IntVar(&workerCount, "c", 22, "Specify Worker count. Default is 10")
