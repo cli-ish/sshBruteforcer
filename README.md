@@ -2,7 +2,7 @@
 A small GoLang app which can bruteforce ssh credentials, was used before for a ctf and is now optimized for future ctf events.
 
 ## Features:
-https://gist.github.com/ometa/71d23ed48c03c003f6e4910648612859
+Implement the Feature: https://gist.github.com/ometa/71d23ed48c03c003f6e4910648612859
 ```
  [#]  Wordlist usage
  [#]  Workers
