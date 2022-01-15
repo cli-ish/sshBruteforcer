@@ -7,7 +7,7 @@ Implement the Feature: https://gist.github.com/ometa/71d23ed48c03c003f6e49106486
  [#]  Wordlist usage
  [#]  Workers
  [#]  Comand-line arguments
- [ ]  Inverted Bruteforce (Username missing, known password)
+ [#]  Inverted Bruteforce (Username missing, known password)
  [ ]  Socket5 Proxy
  [ ]  Socket5 Proxy List
  [ ]  Fail2Ban detection and switch Proxy
