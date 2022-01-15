@@ -42,14 +42,14 @@ func CustomDialTimeout(network, address string, timeout time.Duration, proxySett
 		}
 		dialSocksProxy, err := proxy.SOCKS5("tcp", proxySetting.ip+":"+strconv.Itoa(proxySetting.port), &auth, &d)
 		if err != nil {
-			return nil, err, true // todo: throw different error (rotate proxy because its not reachable)
+			return nil, err, true
 		}
 		conn, err := dialSocksProxy.Dial(network, address)
 		return conn, err, false
 	}
 	dialSocksProxy, err := proxy.SOCKS5("tcp", proxySetting.ip+":"+strconv.Itoa(proxySetting.port), nil, &d)
 	if err != nil {
-		return nil, err, true // todo: throw different error (rotate proxy because its not reachable)
+		return nil, err, true
 	}
 	conn, err := dialSocksProxy.Dial(network, address)
 	return conn, err, false
@@ -145,11 +145,11 @@ func readWordlist(filename string, workerCount int) ([][]string, int, error) {
 	}
 	count := 0
 	for i := 0; i < lineCount; i += partLength {
-		customlen := partLength
-		if i+customlen > lineCount {
-			customlen = lineCount - i
+		customLen := partLength
+		if i+customLen > lineCount {
+			customLen = lineCount - i
 		}
-		result = append(result, lines[i:i+customlen])
+		result = append(result, lines[i:i+customLen])
 		count++
 	}
 	return result, lineCount, nil
@@ -178,12 +178,12 @@ func readProxyList(filename string) ([]ProxySettings, int, error) {
 		pos := strings.Index(proxyData[0], ":")
 		if pos != -1 {
 			proxyEntry.ip = proxyData[0][0:pos]
-			portproxy, err := strconv.Atoi(proxyData[0][pos+1 : len(proxyData[0])])
+			proxyPort, err := strconv.Atoi(proxyData[0][pos+1 : len(proxyData[0])])
 			if err != nil {
 				fmt.Println("not valid proxy-line found: " + line + " should be 'ip:port' or 'ip:port username:password'")
 				continue
 			}
-			proxyEntry.port = portproxy
+			proxyEntry.port = proxyPort
 		} else {
 			fmt.Println("not valid proxy-line found: " + line + " should be 'ip:port' or 'ip:port username:password'")
 			continue
@@ -231,13 +231,13 @@ func main() {
 	pos := strings.Index(proxyaddr, ":")
 	if pos != -1 {
 		globalproxy.ip = proxyaddr[0:pos]
-		portproxy, err := strconv.Atoi(proxyaddr[pos+1 : len(proxyaddr)])
+		proxyPort, err := strconv.Atoi(proxyaddr[pos+1 : len(proxyaddr)])
 		if err != nil {
 			fmt.Println(" Error while parsing proxy. must be in format ip:port to be used!")
 			os.Exit(1)
 			return
 		}
-		globalproxy.port = portproxy
+		globalproxy.port = proxyPort
 	}
 	if globalproxy.ip != "" && proxycreds != "" {
 		pos = strings.Index(proxycreds, ":")
@@ -247,7 +247,7 @@ func main() {
 		}
 	}
 
-	usedproxies := 0
+	usedProxies := 0
 
 	if proxiesPath != "" {
 		proxiesTmp, count, err := readProxyList(proxiesPath)
@@ -258,7 +258,7 @@ func main() {
 		}
 		useProxyList = true
 		proxies = proxiesTmp
-		usedproxies = count
+		usedProxies = count
 	}
 
 	fmt.Println("                                                                                        ")
@@ -277,7 +277,7 @@ func main() {
 	fmt.Println(" wordlist : " + wordlistPath)
 	fmt.Println(" Inverted : " + strconv.FormatBool(inverted))
 	fmt.Println(" ProxyPath: " + proxiesPath)
-	fmt.Println(" Loaded ^ : " + strconv.Itoa(usedproxies))
+	fmt.Println(" Loaded ^ : " + strconv.Itoa(usedProxies))
 	if globalproxy.ip != "" {
 		fmt.Println(" ============= Proxy  ============= ")
 		fmt.Println(" ip       : " + globalproxy.ip)
@@ -293,7 +293,7 @@ func main() {
 
 	target := addr + ":" + strconv.Itoa(port)
 	fmt.Println(" Load Wordlist: " + wordlistPath)
-	wordlists, linecount, err := readWordlist(wordlistPath, workerCount)
+	wordLists, lineCount, err := readWordlist(wordlistPath, workerCount)
 	if err != nil {
 		fmt.Println(" Wordlist could not be found!")
 		os.Exit(1)
@@ -301,16 +301,16 @@ func main() {
 	}
 	wg.Add(workerCount)
 	fmt.Println(" Start " + strconv.Itoa(workerCount) + " wordlist workers...")
-	for _, wordlist := range wordlists {
+	for _, wordlist := range wordLists {
 		go runWordlistPart(target, wordlist, username, int64(timeout), inverted)
 	}
 	fmt.Println(" Started you can now get some coffee")
 	now := time.Now()
 	fmt.Println(" Start time: " + now.Format("01-02-2006 15:04:05"))
-	halfway := now.Add(time.Duration(((timeout*linecount)/2)/workerCount) * time.Second)
+	halfway := now.Add(time.Duration(((timeout*lineCount)/2)/workerCount) * time.Second)
 	fmt.Println(" Halfway wait-time possible: " + halfway.Format("01-02-2006 15:04:05"))
-	fullwait := now.Add(time.Duration((timeout*linecount)/workerCount) * time.Second)
-	fmt.Println(" Longest wait-time possible: " + fullwait.Format("01-02-2006 15:04:05"))
+	fullWait := now.Add(time.Duration((timeout*lineCount)/workerCount) * time.Second)
+	fmt.Println(" Longest wait-time possible: " + fullWait.Format("01-02-2006 15:04:05"))
 	wg.Wait()
 	fmt.Println(" Done with the working!")
 	now = time.Now()
