@@ -18,7 +18,7 @@ import (
 var sem = make(chan struct{}, 1)
 var wg sync.WaitGroup
 var operationDone = false
-var globalproxy ProxySettings
+var globalProxy ProxySettings
 var proxies []ProxySettings
 var useProxyList = false
 
@@ -35,19 +35,14 @@ func CustomDialTimeout(network, address string, timeout time.Duration, proxySett
 		conn, err := d.Dial(network, address)
 		return conn, err, false
 	}
+	var auth *proxy.Auth = nil
 	if proxySetting.username != "" {
-		auth := proxy.Auth{
+		auth = &proxy.Auth{
 			User:     proxySetting.username,
 			Password: proxySetting.password,
 		}
-		dialSocksProxy, err := proxy.SOCKS5("tcp", proxySetting.ip+":"+strconv.Itoa(proxySetting.port), &auth, &d)
-		if err != nil {
-			return nil, err, true
-		}
-		conn, err := dialSocksProxy.Dial(network, address)
-		return conn, err, false
 	}
-	dialSocksProxy, err := proxy.SOCKS5("tcp", proxySetting.ip+":"+strconv.Itoa(proxySetting.port), nil, &d)
+	dialSocksProxy, err := proxy.SOCKS5("tcp", proxySetting.ip+":"+strconv.Itoa(proxySetting.port), auth, &d)
 	if err != nil {
 		return nil, err, true
 	}
@@ -60,12 +55,12 @@ func CustomDial(network, addr string, config *ssh.ClientConfig, proxySetting Pro
 	if err != nil {
 		return nil, err, rotate
 	}
-	c, chans, reqs, err := ssh.NewClientConn(conn, addr, config)
+	c, channels, reqs, err := ssh.NewClientConn(conn, addr, config)
 	if err != nil {
 		rotate = !strings.Contains(fmt.Sprint(err), "ssh: unable to authenticate, attempted methods")
 		return nil, err, rotate
 	}
-	return ssh.NewClient(c, chans, reqs), nil, false
+	return ssh.NewClient(c, channels, reqs), nil, false
 }
 
 func sshLogin(addr string, username string, password string, timeout int64, proxySetting ProxySettings) (bool, bool) {
@@ -81,13 +76,13 @@ func sshLogin(addr string, username string, password string, timeout int64, prox
 	if err != nil {
 		return false, rotate
 	}
-	client.Close()
+	_ = client.Close()
 	return true, false
 }
 
 func runWordlistPart(addr string, list []string, username string, timeout int64, inverted bool) {
 	time.Sleep(time.Duration(rand.Float64() * float64(time.Second)))
-	localProxy := globalproxy
+	localProxy := globalProxy
 	if useProxyList {
 		localProxy = proxies[rand.Intn(len(proxies))]
 	}
@@ -125,10 +120,10 @@ func runWordlistPart(addr string, list []string, username string, timeout int64,
 	<-sem
 }
 
-func readWordlist(filename string, workerCount int) ([][]string, int, error) {
+func readLinesOfFile(filename string) ([]string, error) {
 	f, err := os.Open(filename)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	s := bufio.NewScanner(f)
 	s.Split(bufio.ScanLines)
@@ -136,10 +131,18 @@ func readWordlist(filename string, workerCount int) ([][]string, int, error) {
 	for s.Scan() {
 		lines = append(lines, s.Text())
 	}
-	f.Close()
+	_ = f.Close()
+	return lines, nil
+}
+
+func readWordlist(filename string, workerCount int) ([][]string, int, error) {
+	lines, err := readLinesOfFile(filename)
+	if err != nil {
+		return nil, 0, err
+	}
 	lineCount := len(lines)
 	var result [][]string
-	partLength := int(lineCount / workerCount)
+	partLength := lineCount / workerCount
 	if partLength == 0 {
 		return nil, 0, fmt.Errorf("error while worker assigment: more or equal worker assigned than wordlist entries")
 	}
@@ -156,17 +159,10 @@ func readWordlist(filename string, workerCount int) ([][]string, int, error) {
 }
 
 func readProxyList(filename string) ([]ProxySettings, int, error) {
-	f, err := os.Open(filename)
+	lines, err := readLinesOfFile(filename)
 	if err != nil {
 		return nil, 0, err
 	}
-	s := bufio.NewScanner(f)
-	s.Split(bufio.ScanLines)
-	var lines []string
-	for s.Scan() {
-		lines = append(lines, s.Text())
-	}
-	f.Close()
 	var proxies_ []ProxySettings
 	for _, line := range lines {
 		proxyEntry := ProxySettings{}
@@ -175,29 +171,35 @@ func readProxyList(filename string) ([]ProxySettings, int, error) {
 			fmt.Println("not valid proxy-line found: " + line + " should be 'ip:port' or 'ip:port username:password'")
 			continue
 		}
-		pos := strings.Index(proxyData[0], ":")
-		if pos != -1 {
-			proxyEntry.ip = proxyData[0][0:pos]
-			proxyPort, err := strconv.Atoi(proxyData[0][pos+1 : len(proxyData[0])])
+		proxyPortStr := ""
+		proxyEntry.ip, proxyPortStr, err = parseSyntax(proxyData[0])
+		proxyPort, interr := strconv.Atoi(proxyPortStr)
+		if err != nil || interr != nil {
+			fmt.Println("not valid proxy-line found: " + line + " should be 'ip:port' or 'ip:port username:password'")
+			continue
+		}
+		proxyEntry.port = proxyPort
+
+		if len(proxyData) == 2 && proxyEntry.ip != "" && proxyData[1] != "" {
+			proxyEntry.username, proxyEntry.password, err = parseSyntax(proxyData[1])
 			if err != nil {
 				fmt.Println("not valid proxy-line found: " + line + " should be 'ip:port' or 'ip:port username:password'")
 				continue
 			}
-			proxyEntry.port = proxyPort
-		} else {
-			fmt.Println("not valid proxy-line found: " + line + " should be 'ip:port' or 'ip:port username:password'")
-			continue
-		}
-		if len(proxyData) == 2 && proxyEntry.ip != "" && proxyData[1] != "" {
-			pos = strings.Index(proxyData[1], ":")
-			if pos != -1 {
-				proxyEntry.username = proxyData[1][0:pos]
-				proxyEntry.password = proxyData[1][pos+1 : len(proxyData[1])]
-			}
 		}
 		proxies_ = append(proxies_, proxyEntry)
 	}
-	return proxies, len(lines), nil
+	return proxies_, len(lines), nil
+}
+
+func parseSyntax(text string) (string, string, error) {
+	pos := strings.Index(text, ":")
+	if pos != -1 {
+		part1 := text[0:pos]
+		part2 := text[pos+1:]
+		return part1, part2, nil
+	}
+	return "", "", fmt.Errorf("not valid proxy-line found: " + text + " should be 'xxxx:xxxxx'")
 }
 
 func main() {
@@ -209,7 +211,7 @@ func main() {
 	workerCount := 10
 	timeout := 3
 	inverted := false
-	globalproxy = ProxySettings{ip: "", port: 0}
+	globalProxy = ProxySettings{ip: "", port: 0}
 	proxyaddr := ""
 	proxycreds := ""
 
@@ -228,25 +230,26 @@ func main() {
 		flag.PrintDefaults() // prints default usage
 	}
 	flag.Parse()
-	pos := strings.Index(proxyaddr, ":")
-	if pos != -1 {
-		globalproxy.ip = proxyaddr[0:pos]
-		proxyPort, err := strconv.Atoi(proxyaddr[pos+1 : len(proxyaddr)])
-		if err != nil {
-			fmt.Println(" Error while parsing proxy. must be in format ip:port to be used!")
+
+	if proxyaddr != "" {
+		proxyIp, proxyPortStr, err := parseSyntax(proxyaddr)
+		proxyPort, interr := strconv.Atoi(proxyPortStr)
+		if err != nil || interr != nil {
+			fmt.Println("not valid proxy-line found: " + proxyaddr + " should be 'ip:port' or 'ip:port username:password'")
 			os.Exit(1)
 			return
 		}
-		globalproxy.port = proxyPort
-	}
-	if globalproxy.ip != "" && proxycreds != "" {
-		pos = strings.Index(proxycreds, ":")
-		if pos != -1 {
-			globalproxy.username = proxycreds[0:pos]
-			globalproxy.password = proxycreds[pos+1 : len(proxycreds)]
+		globalProxy.ip = proxyIp
+		globalProxy.port = proxyPort
+		if proxycreds != "" {
+			globalProxy.username, globalProxy.password, err = parseSyntax(proxycreds)
+			if err != nil {
+				fmt.Println("not valid proxy-line found: " + proxycreds + " should be 'ip:port' or 'ip:port username:password'")
+				os.Exit(1)
+				return
+			}
 		}
 	}
-
 	usedProxies := 0
 
 	if proxiesPath != "" {
@@ -278,13 +281,13 @@ func main() {
 	fmt.Println(" Inverted : " + strconv.FormatBool(inverted))
 	fmt.Println(" ProxyPath: " + proxiesPath)
 	fmt.Println(" Loaded ^ : " + strconv.Itoa(usedProxies))
-	if globalproxy.ip != "" {
+	if globalProxy.ip != "" {
 		fmt.Println(" ============= Proxy  ============= ")
-		fmt.Println(" ip       : " + globalproxy.ip)
-		fmt.Println(" port     : " + strconv.Itoa(globalproxy.port))
-		if globalproxy.username != "" {
-			fmt.Println(" username : " + globalproxy.username)
-			fmt.Println(" password : " + globalproxy.password)
+		fmt.Println(" ip       : " + globalProxy.ip)
+		fmt.Println(" port     : " + strconv.Itoa(globalProxy.port))
+		if globalProxy.username != "" {
+			fmt.Println(" username : " + globalProxy.username)
+			fmt.Println(" password : " + globalProxy.password)
 		}
 		fmt.Println(" ============= Proxy  ============= ")
 	}
