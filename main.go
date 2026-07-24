@@ -4,8 +4,6 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
-	"golang.org/x/crypto/ssh"
-	"golang.org/x/net/proxy"
 	"math/rand"
 	"net"
 	"os"
@@ -13,6 +11,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/net/proxy"
 )
 
 var sem = make(chan struct{}, 1)
